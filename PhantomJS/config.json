@@ -1,0 +1,5 @@
+{
+  'loadImages' : false,
+  'loadPlugins' : false
+  'ignoreSslErrors' : true,
+}

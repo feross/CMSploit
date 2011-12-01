@@ -1,0 +1,16 @@
+<html>
+<head>
+<script src="lib/jquery.js"></script>
+<script>
+  $(function() {
+    $('#startTest').click(function(e) {
+      chrome.extension.getBackgroundPage().startTest();
+    });
+  });
+</script>
+</head>
+<body>
+  <h1>CMSpionage</h1>
+  <a id="startTest" href="#">Test top 1 million sites</a>
+</body>
+</html>

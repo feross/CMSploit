@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Possible CMS Password Files</title>
+</head>
+<body>
+  <script src="lib/jquery.js"></script>
+  <script src="lib/jquery.tmpl.min.js"></script>
+  <script>
+    $(function() {
+      var testedSites =
+        chrome.extension.getBackgroundPage().testedSites;
+
+      if (!testedSites) return;
+
+      $.each(testedSites, function(i, v) {
+        $("#logItem")
+          .tmpl(v)
+          .appendTo('#wrapper');
+      })
+    });
+  </script>
+  <script id="logItem" type="text/x-jquery-tmpl">
+    <div>
+      <img src="chrome://favicon/${origin}">
+      <h2><a href="${url}" target="_blank">${url}</a></h2>
+      <small><pre>${data}</pre></small>
+    </div>
+  </script>
+  <div id="wrapper">
+    <h1>Possible CMS Password Files</h1>
+  </div>
+</body>
+</html>

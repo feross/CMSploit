@@ -1,0 +1,24 @@
+{
+  "name": "CMSpionage",
+  "version": "1.0",
+  "description": "The first extension I've made.",
+  "browser_action": {
+    "default_icon": "icon.png"
+  },
+  "background_page": "background.html",
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["contentscript.js"]
+    }
+  ],
+  "permissions": [
+    "tabs",
+    "unlimitedStorage",
+    "chrome://favicon/",
+    "notifications",
+    "http://*/*",
+    "https://*/*"
+  ]
+}

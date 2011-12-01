@@ -1,0 +1,315 @@
+<html>
+<head>
+<script src="lib/jquery.js"></script>
+<script>
+
+/*
+TODO
+
+WISHLIST
+- Log page
+  - show items in order
+  - allow deletion
+  - allow retesting a site
+- Improve design of log and options pages
+
+*/
+
+var settings = {
+  windows : false, // search for windows temp files (. -> _) (2x slower)
+  swapFiles : false, // search for swap files (less useful) (2x slower)
+}
+
+// String truncation code from Stack Overflow: http://goo.gl/kAq6w
+String.prototype.trunc = function(n) {
+  return this.substr(0,n-1)+(this.length>n?'...':'');
+};
+
+/**
+ *  Wrapper for values we want to persist in localStorage.
+ *  Only works for primitive values.
+ */
+var store = new (function() {
+  var badgeCount = 0; // the number of unviewed 'found files'
+  if (localStorage.badgeCount) {
+    badgeCount = parseInt(localStorage.badgeCount);
+  }
+  this.__defineGetter__('badgeCount', function() {
+    return badgeCount;
+  });
+  this.__defineSetter__('badgeCount', function(val) {
+    badgeCount = val;
+    localStorage.badgeCount = String(badgeCount);
+  });
+});
+
+/**
+ *  Commonly used badge functionality
+ */
+function refreshBadge() {
+  if (store.badgeCount) {
+    chrome.browserAction.setBadgeText({text : String(store.badgeCount)});
+  } else {
+    chrome.browserAction.setBadgeText({text : ''});
+  }
+}
+refreshBadge();
+
+function incBadge() {
+  store.badgeCount += 1;
+  refreshBadge();
+}
+
+function decBadge() {
+  store.badgeCount -= 1;
+  refreshBadge();
+}
+
+function zeroBadge() {
+  store.badgeCount = 0;
+  refreshBadge();
+}
+
+/**
+ *  Object that stores all the sites we've tested for and their results.
+ *  Used to render the log page.
+ */
+var testedSites = {};
+if (localStorage.testedSites) {
+  testedSites = JSON.parse(localStorage.testedSites);
+}
+function saveTestedSites() {
+  localStorage.testedSites = JSON.stringify(testedSites);
+}
+
+var configFiles = [
+  'config.php',               // phpBB, ExpressionEngine
+  'configuration.php',        // Joomla
+  'LocalSettings.php',        // MediaWiki
+  'mt-config.cgi',            // Movable Type
+  //  'mt-static/mt-config.cgi'   // Movable Type
+  'settings.php',             // Drupal
+  //  'system/config/config.php', // Contao
+  'wp-config.php',            // Wordpress
+];
+
+/**
+ *  Each backup file prefix/suffix is represented by an array, where
+ *  arr[0] is the prefix and arr[1] is the suffix.
+ */
+var backupFileFormat = [
+  ['', '.save'],        // Nano crash file
+  ['', '.save.1'],      // Nano crash file (only saved sometimes)
+  ['', '.save.2'],      // Nano crash file (only saved sometimes)
+  ['%23', '%23'],       // Emacs crash file (%23 is urlencoded hash (#))
+  ['', '~'],            // Vim backup file and Gedit crash file
+  ['', '.bak'],         // Common backup file extension
+  ['', '.backup'],      // Common backup file extension
+];
+
+/**
+ *  Swap files only contain the changes since the last save, though that
+ *  could still be very useful.
+ */
+var swapFileFormat = [
+  ['', '.swp'],         // Vim
+  ['', '.swo'],         // Vim
+  ['.', '.swp'],        // Vim (on unix)
+  ['.', '.swp'],        // Vim (on unix)
+  ['', '._'],           // Mac OS X resource fork file (maybe useful)
+];
+
+/**
+ *  Build up an array of all file names to test for.
+ */
+function allTestFiles() {
+  var ret = [];
+
+  var tempFileFormats = $.merge([], backupFileFormat); // clone array
+  if (settings.swapFiles) {
+    $.merge(tempFileFormats, swapFileFormat); // merge arrays
+  }
+
+  $.each(configFiles, function(i, configFile) {
+    $.each(tempFileFormats, function(i, tempFormat) {
+      var file = tempFormat[0] + configFile + tempFormat[1];
+      ret.push(file);
+
+      // On windows, vim replaces dots with underscores in backup file.
+      if (settings.windows) {
+        var windowsFile = file.replace(/\./gi, '_');
+        ret.push(windowsFile);
+      }
+    });
+  });
+
+  return ret;
+}
+var testFiles = allTestFiles();
+
+/**
+ *  Test a given origin (ex: http://feross.org:80/) for publicly-visible
+ *  CMS configuration files.
+ *
+ *  We call it an "origin" because it is comprised of protocol, hostname,
+ *  and port -- just like the same-origin policy.
+ */
+function testOrigin(origin, callback, showNotif) {
+  if (!origin ||
+      testedSites[origin] /* only check each site once */ ) {
+    callback();
+    return;
+  }
+
+  var notFoundPages = [];
+
+  var len = testFiles.length;
+
+  function checkFile(i) {
+    if (i > len - 1) {
+      // Mark this site as checked & nothing was found
+      if (!testedSites[origin]) {
+        testedSites[origin] = [];
+        saveTestedSites();
+      }
+
+      callback();
+      return;
+    };
+
+    var url = origin + testFiles[i];
+
+    $.ajax({
+      url: url,
+      success: function(data, textStatus, jqXHR) {
+        // Data looks the same as a Not Found page, so ignore it
+        var notFound;
+        $.each(notFoundPages, function(i, notFoundPage) {
+          if (data.trunc(100) == notFoundPage.trunc(100)) {
+            notFound = true;
+          }
+        });
+        if (notFound) return;
+
+        // Data that looks like an HTML page
+        var pageHead = data.trunc(100).toLowerCase();
+        if (pageHead.indexOf('<!doctype') != -1 ||
+            pageHead.indexOf('<!--') != -1) {
+          return;
+        }
+
+        onFoundFile(origin, url, data, showNotif);
+      },
+      complete: function(jqXHR, textStatus) {
+        i += 1;
+        checkFile(i);
+      }
+    });
+  }
+
+  // When looking for password files, if we find a file that has a 200
+  // code (success), but it looks like this Not Found page, then
+  // ignore it.
+  $.ajax({
+    url: origin + 'TESTING_FOR_404_LULZ.php',
+    success: function(data, textStatus, jqXHR){
+      notFoundPages.push(data);
+    },
+    complete: function(jqXHR, textStatus) {
+      // We need to test for a second type of Not Found page because
+      // lots of servers act differently for URLs that contain %23,
+      // for some reason.
+      $.ajax({
+        url: origin + '%23_TESTING_FOR_404_LULZ.php',
+        success: function(data, textStatus, jqXHR){
+          notFoundPages.push(data);
+        },
+        complete: function(jqXHR, textStatus) {
+          checkFile(0);
+        }
+      });
+    }
+  });
+}
+
+function onFoundFile(origin, url, data, showNotif) {
+  incBadge();
+
+  if (!testedSites[origin]) {
+    testedSites[origin] = [];
+  }
+  testedSites[origin].push({
+    origin : origin,
+    url : url,
+    data: data.trunc(200)}
+  );
+  saveTestedSites();
+
+  if (showNotif) {
+    // Create a simple text notification:
+    var notification = webkitNotifications.createNotification(
+      'crosshair.png',
+      'Possible CMS password file found!',  // notification title
+      url  // notification body text
+    );
+
+    // Then show the notification.
+    notification.show();
+
+    notification.onclick = function() {
+      chrome.tabs.create({url : url});
+      decBadge();
+      this.cancel();
+    };
+
+    // Then hide notication after n seconds.
+    window.setTimeout(function() {
+      notification.cancel();
+    }, 10000);
+  }
+}
+
+function startTest() {
+  var re = /\d+\t(.+)/g;
+  $.get('sites.txt').success(function(data) {
+
+    function testNextSite() {
+      var result;
+      if ((result = re.exec(data)) != null) {
+        var hostname = result[1];
+        console.log(hostname);
+
+        testOrigin('http://'+hostname+'/', testNextSite);
+      }
+    }
+    for (var i = 0; i < 10; i++) {
+      testNextSite();
+    }
+  });
+}
+
+// Called on every page load
+chrome.extension.onRequest.addListener(
+  function(loc, sender, sendResponse) {
+    if (!loc) return;
+
+    var origin = loc.protocol + '//' + loc.hostname;
+    if (loc.port) {
+      origin += ':' + loc.port;
+    }
+    origin += '/';
+
+    testOrigin(origin, function() {}, true);
+    sendResponse();
+  }
+);
+
+// Called when the user clicks on the browser action
+chrome.browserAction.onClicked.addListener(function(tab) {
+  chrome.tabs.create({url : 'log.html'});
+  zeroBadge();
+});
+
+</script>
+</head>
+</html>
